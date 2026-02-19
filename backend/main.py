@@ -8,7 +8,7 @@ from datetime import datetime
 from fastapi.middleware.cors import CORSMiddleware
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # 1. AI Setup
 api_key = os.getenv("GEMINI_API_KEY")
@@ -26,11 +26,10 @@ if mongo_url:
         db = client.codeguard_db
         collection = db.audits
     except Exception as e:
-        print(f"MongoDB Init Error: {e}")
+        print(f"Database connection error: {e}")
 
 app = FastAPI(title="CodeGuard API")
 
-# CORS CONFIGURATION
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -49,6 +48,7 @@ class CodeRequest(BaseModel):
 @app.post("/analyze")
 async def analyze_code(request: CodeRequest):
     try:
+        # Using a stable, high-performance model identifier
         model = genai.GenerativeModel("gemini-1.5-flash")
         prompt = f"Act as a Senior Security Engineer. Review this code for vulnerabilities and give a brief audit report in Markdown format:\n\n{request.code}"
         
@@ -65,7 +65,7 @@ async def analyze_code(request: CodeRequest):
 
         return {
             "audit_report": audit_text, 
-            "db_status": "Logged to cloud archive" if collection is not None else "AI analysis complete (DB offline)"
+            "db_status": "Successfully logged to cloud archive" if collection is not None else "Analysis complete (DB bypass)"
         }
     except Exception as e:
         return {"error": str(e)}
