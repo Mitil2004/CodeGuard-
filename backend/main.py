@@ -64,7 +64,7 @@ async def analyze(request: CodeRequest):
         raise HTTPException(status_code=500, detail="Gemini API Key is not configured on the server.")
     
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         prompt = (
             "Act as a Senior Security Research Engineer. Perform a deep security audit on the following source code. "
             "Identify vulnerabilities, rate their severity (Low/Medium/High/Critical), and provide fix recommendations. "
