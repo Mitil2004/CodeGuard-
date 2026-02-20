@@ -1,35 +1,18 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-import google.generativeai as genai
 import os
-from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+import google.generativeai as genai
 import motor.motor_asyncio
 from datetime import datetime
-from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 
 # Load environment variables
-load_dotenv(override=True)
-
-# 1. AI Setup
-api_key = os.getenv("GEMINI_API_KEY")
-if api_key:
-    genai.configure(api_key=api_key)
-
-# 2. MongoDB Setup
-mongo_url = os.getenv("MONGODB_URL")
-client = None
-collection = None
-
-if mongo_url:
-    try:
-        client = motor.motor_asyncio.AsyncIOMotorClient(mongo_url)
-        db = client.codeguard_db
-        collection = db.audits
-    except Exception as e:
-        print(f"Database connection error: {e}")
+load_dotenv()
 
 app = FastAPI(title="CodeGuard API")
 
+# Enable CORS for the React frontend (Vercel)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,52 +21,91 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
-async def root():
-    return {"message": "CodeGuard is active!"}
+# Configuration from Environment Variables
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+MONGO_URL = os.getenv("MONGODB_URL")
+
+# Initialize Gemini AI
+if GEMINI_KEY:
+    try:
+        genai.configure(api_key=GEMINI_KEY)
+        print("✅ SUCCESS: Gemini AI Engine Initialized.")
+    except Exception as e:
+        print(f"❌ ERROR: Gemini Config Failed: {e}")
+else:
+    print("⚠️ WARNING: GEMINI_API_KEY is missing.")
+
+# Initialize MongoDB Cloud Archive
+db_client = None
+collection = None
+if MONGO_URL:
+    try:
+        db_client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URL)
+        db = db_client.codeguard_db
+        collection = db.audits
+        print("✅ SUCCESS: MongoDB Cloud Archive Linked.")
+    except Exception as e:
+        print(f"❌ ERROR: MongoDB Link Failed: {e}")
 
 class CodeRequest(BaseModel):
     code: str
 
+@app.get("/")
+async def root():
+    return {
+        "status": "online", 
+        "message": "CodeGuard SEC-OPS API is active",
+        "engine": "Gemini 1.5 Flash"
+    }
+
 @app.post("/analyze")
-async def analyze_code(request: CodeRequest):
+async def analyze(request: CodeRequest):
+    if not GEMINI_KEY:
+        raise HTTPException(status_code=500, detail="Gemini API Key is not configured on the server.")
+    
     try:
-        # Using a stable, high-performance model identifier
         model = genai.GenerativeModel("gemini-1.5-flash")
-        prompt = f"Act as a Senior Security Engineer. Review this code for vulnerabilities and give a brief audit report in Markdown format:\n\n{request.code}"
+        prompt = (
+            "Act as a Senior Security Research Engineer. Perform a deep security audit on the following source code. "
+            "Identify vulnerabilities, rate their severity (Low/Medium/High/Critical), and provide fix recommendations. "
+            "Format the entire response in clean Markdown:\n\n"
+            f"{request.code}"
+        )
         
         response = model.generate_content(prompt)
-        audit_text = response.text
+        report_text = response.text
 
+        # Log to Database if connected
         if collection is not None:
-            audit_entry = {
-                "code_submitted": request.code,
-                "audit_report": audit_text,
+            await collection.insert_one({
+                "code": request.code,
+                "report": report_text,
                 "timestamp": datetime.utcnow()
-            }
-            await collection.insert_one(audit_entry)
+            })
 
         return {
-            "audit_report": audit_text, 
-            "db_status": "Successfully logged to cloud archive" if collection is not None else "Analysis complete (DB bypass)"
+            "audit_report": report_text, 
+            "db_status": "Logged to Cloud Archive" if collection is not None else "DB Offline (Local Session Only)"
         }
     except Exception as e:
+        print(f"Audit Exception: {e}")
         return {"error": str(e)}
 
 @app.get("/history")
-async def get_history():
+async def history():
     if collection is None:
         return {"history": []}
     try:
+        # Fetch last 10 audits
         cursor = collection.find().sort("timestamp", -1).limit(10)
-        past_audits = []
+        logs = []
         async for doc in cursor:
-            past_audits.append({
+            logs.append({
                 "id": str(doc["_id"]),
-                "code": doc["code_submitted"],
-                "report": doc["audit_report"],
-                "time": doc["timestamp"].isoformat() if "timestamp" in doc else "Unknown"
+                "code": doc.get("code", ""),
+                "report": doc.get("report", ""),
+                "time": doc.get("timestamp").isoformat() if doc.get("timestamp") else None
             })
-        return {"history": past_audits}
+        return {"history": logs}
     except Exception as e:
         return {"error": str(e)}
